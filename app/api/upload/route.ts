@@ -10,44 +10,62 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Parse request body
-    const body = await request.json();
-    const { imagekit, userId: bodyUserId } = body;
-
-    // Verify the user is uploading to their own account
-    if (bodyUserId !== userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Guard: ensure Content-Type is JSON
+    const contentType = request.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      return NextResponse.json(
+        { error: "Content-Type must be application/json" },
+        { status: 415 }
+      );
     }
 
-    // Validate ImageKit response
-    if (!imagekit || !imagekit.url) {
+    let body: { imagekit?: Record<string, unknown>; userId?: string };
+    try {
+      body = await request.json();
+    } catch {
       return NextResponse.json(
-        { error: "Invalid file upload data" },
+        { error: "Invalid JSON body" },
         { status: 400 }
       );
     }
 
-    // Extract file information from ImageKit response
+    const { imagekit, userId: bodyUserId } = body;
+
+    if (bodyUserId !== userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (!imagekit || typeof imagekit.url !== "string") {
+      return NextResponse.json(
+        { error: "Invalid file upload data — missing imagekit.url" },
+        { status: 400 }
+      );
+    }
+
     const fileData = {
-      name: imagekit.name || "Untitled",
-      path: imagekit.filePath || `/droply/${userId}/${imagekit.name}`,
-      size: imagekit.size || 0,
-      type: imagekit.fileType || "image",
-      fileUrl: imagekit.url,
-      thumbnailUrl: imagekit.thumbnailUrl || null,
-      userId: userId,
-      parentId: null, // Root level by default
+      name: (imagekit.name as string) || "Untitled",
+      path:
+        (imagekit.filePath as string) ||
+        `/droply/${userId}/${imagekit.name as string}`,
+      size: (imagekit.size as number) || 0,
+      // Normalize type — avoid schema enum mismatches
+      type: (imagekit.fileType as string)?.toLowerCase() || "image",
+      fileUrl: imagekit.url as string,
+      // Use undefined instead of null if your schema requires it
+      thumbnailUrl: (imagekit.thumbnailUrl as string) ?? undefined,
+      userId,
+      parentId: null,
       isFolder: false,
       isStarred: false,
       isTrash: false,
     };
 
-    // Insert file record into database
     const [newFile] = await db.insert(files).values(fileData).returning();
 
     return NextResponse.json(newFile);
   } catch (error) {
-    console.error("Error saving file:", error);
+    // Log the full error detail for debugging
+    console.error("Error saving file:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
     return NextResponse.json(
       { error: "Failed to save file information" },
       { status: 500 }
